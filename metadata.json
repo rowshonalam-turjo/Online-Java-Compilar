@@ -1,0 +1,6 @@
+{
+  "name": "Java Online Compiler",
+  "description": "Production-grade Online Java Compiler with Monaco Editor, Spring Boot backend support, Docker sandbox runner, STDIN support, and execution telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
