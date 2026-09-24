@@ -43,6 +43,20 @@
           e.preventDefault();
         }
       });
+
+      // Prevent browser default actions (like Save Webpage, Bookmark, Reload) from stealing IDE shortcuts
+      window.addEventListener('keydown', function (e) {
+        var isCtrl = e.ctrlKey || e.metaKey;
+        var key = e.key ? e.key.toLowerCase() : '';
+        var active = document.activeElement;
+        var inEditor = active && (active.classList.contains('inputarea') || (active.closest && active.closest('.monaco-editor')));
+
+        if (inEditor && isCtrl) {
+          if (key === 's' || key === 'r') {
+            e.preventDefault();
+          }
+        }
+      }, true);
     </script>
   </head>
   <body>

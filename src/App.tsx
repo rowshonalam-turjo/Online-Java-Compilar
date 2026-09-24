@@ -311,7 +311,7 @@ export default function App() {
   const isDark = theme === 'dark';
 
   return (
-    <div className={`flex flex-col h-screen w-screen font-sans overflow-hidden select-none transition-colors ${
+    <div className={`flex flex-col h-screen w-screen font-sans overflow-hidden transition-colors ${
       isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Top IDE Header Bar */}
@@ -340,7 +340,9 @@ export default function App() {
             code={code}
             onChange={(val) => {
               setCode(val);
-              // Clear line jump target on manual code edits
+              if (response?.error) {
+                setResponse(null);
+              }
               if (targetLine) setTargetLine(null);
             }}
             isRunning={isRunning}

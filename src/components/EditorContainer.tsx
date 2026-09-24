@@ -17,6 +17,8 @@ interface EditorContainerProps {
   targetLine?: { line: number; col?: number; timestamp: number } | null;
 }
 
+const TARGET_KEYS = new Set(['x', 'X', 'v', 'V', 'z', 'Z', 's', 'S', 'd', 'D', 'r', 'R']);
+
 export const EditorContainer: React.FC<EditorContainerProps> = ({
   code,
   onChange,
@@ -31,16 +33,111 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
   const isDark = theme === 'dark';
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
+  const hasMarkersRef = useRef<boolean>(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    // Focus editor immediately on mount
+    editor.focus();
+
+    // Ensure the underlying hidden textarea has standard focus and input attributes
+    const domNode = editor.getDomNode();
+    const textarea = domNode?.querySelector('textarea.inputarea') as HTMLTextAreaElement | null;
+    if (textarea) {
+      textarea.setAttribute('aria-label', 'Java Code Editor');
+      textarea.setAttribute('autocapitalize', 'off');
+      textarea.setAttribute('autocomplete', 'off');
+      textarea.setAttribute('autocorrect', 'off');
+      textarea.setAttribute('spellcheck', 'false');
+      textarea.focus();
+    }
+
     // Register Ctrl+Enter or Cmd+Enter to run code
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       onRun();
     });
+
+    // Register Ctrl+R or Cmd+R to run code (preventing browser page reload)
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyR, () => {
+      onRun();
+    });
+
+    // Register Ctrl+S or Cmd+S to prevent browser "Save Webpage As" dialog
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      // Benign save action: format document if available
+      editor.getAction('editor.action.formatDocument')?.run();
+    });
+
+    // Register Ctrl+D or Cmd+D to select next matching word
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD, () => {
+      editor.getAction('editor.action.addSelectionToNextFindMatch')?.run();
+    });
+
+    // Ensure target keys (x, v, z, s, d, r) are typed even if an external extension called preventDefault
+    editor.onKeyDown((e: any) => {
+      const browserEvent = e.browserEvent as KeyboardEvent;
+      if (!browserEvent) return;
+
+      const isPlain = !browserEvent.ctrlKey && !browserEvent.metaKey && !browserEvent.altKey;
+
+      if (isPlain && TARGET_KEYS.has(browserEvent.key)) {
+        // If an extension or browser interceptor called preventDefault():
+        // Monaco natively ignores keys with defaultPrevented === true!
+        // We force-insert the character at the current cursor position.
+        if (browserEvent.defaultPrevented) {
+          editor.trigger('keyboard', 'type', { text: browserEvent.key });
+        }
+      }
+    });
   };
+
+  // Global window capture listener to protect editor focus from browser shortcuts and extensions
+  useEffect(() => {
+    const handleCaptureKeyDown = (e: KeyboardEvent) => {
+      if (!editorRef.current) return;
+      const editor = editorRef.current;
+      const domNode = editor.getDomNode();
+      if (!domNode) return;
+
+      const isEditorActive =
+        editor.hasTextFocus() ||
+        domNode.contains(document.activeElement) ||
+        document.activeElement === domNode ||
+        containerRef.current?.contains(document.activeElement);
+
+      if (!isEditorActive) return;
+
+      // Prevent browser Ctrl+S (Save webpage)
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        return;
+      }
+
+      // Prevent browser Ctrl+R (Reload webpage) and trigger Run
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        onRun();
+        return;
+      }
+
+      // If user is typing x, v, z, s, d, r plain keys, ensure textarea is focused
+      const isPlain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (isPlain && TARGET_KEYS.has(e.key)) {
+        const textarea = domNode.querySelector('textarea.inputarea') as HTMLTextAreaElement | null;
+        if (textarea && document.activeElement !== textarea) {
+          textarea.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleCaptureKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', handleCaptureKeyDown, { capture: true });
+    };
+  }, [onRun]);
 
   // Only jump when user explicitly clicks an error link in the output panel
   useEffect(() => {
@@ -61,7 +158,10 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
     if (!model) return;
 
     if (!errors || errors.length === 0) {
-      monaco.editor.setModelMarkers(model, 'java-diagnostics', []);
+      if (hasMarkersRef.current) {
+        monaco.editor.setModelMarkers(model, 'java-diagnostics', []);
+        hasMarkersRef.current = false;
+      }
       return;
     }
 
@@ -83,15 +183,19 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
     });
 
     monaco.editor.setModelMarkers(model, 'java-diagnostics', markers);
+    hasMarkersRef.current = true;
   }, [errors]);
 
   const handleCodeChange = (newVal: string | undefined) => {
     const val = newVal ?? '';
     // Clear markers when user starts editing so old errors don't linger
-    if (monacoRef.current && editorRef.current) {
-      const model = editorRef.current.getModel();
-      if (model) {
-        monacoRef.current.editor.setModelMarkers(model, 'java-diagnostics', []);
+    if (hasMarkersRef.current) {
+      hasMarkersRef.current = false;
+      if (monacoRef.current && editorRef.current) {
+        const model = editorRef.current.getModel();
+        if (model) {
+          monacoRef.current.editor.setModelMarkers(model, 'java-diagnostics', []);
+        }
       }
     }
     onChange(val);
@@ -116,11 +220,19 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
   };
 
   return (
-    <div className={`flex flex-col border rounded-lg overflow-hidden h-full w-full transition-colors ${
-      isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-    }`}>
-      {/* Editor Tab & Toolbar Header */}
-      <div className={`h-11 border-b px-3 flex items-center justify-between gap-2 select-none transition-colors ${
+    <div
+      ref={containerRef}
+      className={`flex flex-col border rounded-lg overflow-hidden h-full w-full transition-colors ${
+        isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+      }`}
+      onClick={() => {
+        if (editorRef.current && !editorRef.current.hasTextFocus()) {
+          editorRef.current.focus();
+        }
+      }}
+    >
+      {/* Editor Tab & Main Toolbar Header */}
+      <div className={`h-11 border-b px-3 flex items-center justify-between gap-2 transition-colors ${
         isDark ? 'bg-slate-950/90 border-slate-800' : 'bg-slate-100 border-slate-200'
       }`}>
         <div className="flex items-center gap-2">
@@ -132,7 +244,7 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           </div>
 
-          <span className={`text-[11px] font-mono hidden sm:inline ${
+          <span className={`text-[11px] font-mono hidden md:inline ${
             isDark ? 'text-slate-500' : 'text-slate-400'
           }`}>
             {linesCount} lines • {charCount} chars
@@ -161,7 +273,7 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             <button
               onClick={onRun}
               className="group relative inline-flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white font-bold text-xs sm:text-sm rounded-md shadow-lg shadow-emerald-950/60 ring-2 ring-emerald-500/30 hover:ring-emerald-400/50 active:scale-95 hover:scale-[1.02] transition-all cursor-pointer"
-              title="Run Java Code (Ctrl + Enter)"
+              title="Run Java Code (Ctrl + Enter / Ctrl + R)"
             >
               <Play className="w-4 h-4 fill-current group-hover:scale-110 transition-transform" />
               <span className="uppercase tracking-wider">Run</span>
@@ -180,7 +292,7 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
       </div>
 
       {/* Monaco Editor Mount Area */}
-      <div className={`flex-1 min-h-0 relative ${isDark ? 'bg-[#1e1e1e]' : 'bg-white'}`}>
+      <div className={`flex-1 min-h-0 relative select-text ${isDark ? 'bg-[#1e1e1e]' : 'bg-white'}`}>
         <Editor
           height="100%"
           defaultLanguage="java"
@@ -202,6 +314,8 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             bracketPairColorization: { enabled: true },
             formatOnType: false,
             formatOnPaste: false,
+            readOnly: false,
+            domReadOnly: false,
             padding: { top: 10, bottom: 10 },
           }}
         />
