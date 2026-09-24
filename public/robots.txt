@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://java-online-compiler.ai.studio/sitemap.xml

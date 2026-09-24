@@ -1,6 +1,8 @@
 {
   "name": "Java Online Compiler",
-  "description": "Production-grade Online Java Compiler with Monaco Editor, Spring Boot backend support, Docker sandbox runner, STDIN support, and execution telemetry.",
+  "description": "Fast Online Java Compiler and IDE powered by OpenJDK 17. Write, compile, and run Java code directly in your browser with instant output.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

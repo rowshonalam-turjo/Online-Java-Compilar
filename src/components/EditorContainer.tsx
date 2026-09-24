@@ -1,7 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import Editor, { OnMount } from '@monaco-editor/react';
-import { FileCode, Play, Square } from 'lucide-react';
+import { FileCode, Play, Square, Sparkles } from 'lucide-react';
 import { EditorSettings } from '../types';
+import { findMissingImports, applyAutoImportsToCode } from '../utils/autoImport';
+import { CodeError } from '../utils/errorParser';
 
 interface EditorContainerProps {
   code: string;
@@ -11,6 +13,8 @@ interface EditorContainerProps {
   onStop: () => void;
   settings: EditorSettings;
   theme?: 'dark' | 'light';
+  errors?: CodeError[];
+  targetLine?: { line: number; col?: number; timestamp: number } | null;
 }
 
 export const EditorContainer: React.FC<EditorContainerProps> = ({
@@ -21,12 +25,16 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
   onStop,
   settings,
   theme = 'dark',
+  errors = [],
+  targetLine = null,
 }) => {
   const isDark = theme === 'dark';
   const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
 
     // Register Ctrl+Enter or Cmd+Enter to run code
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -34,8 +42,78 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
     });
   };
 
+  // Only jump when user explicitly clicks an error link in the output panel
+  useEffect(() => {
+    if (targetLine && targetLine.line > 0 && editorRef.current) {
+      const editor = editorRef.current;
+      editor.revealLineInCenter(targetLine.line);
+      editor.setPosition({ lineNumber: targetLine.line, column: targetLine.col || 1 });
+      editor.focus();
+    }
+  }, [targetLine]);
+
+  // Set subtle native Monaco markers (standard squiggly line under error, NO whole line coloring)
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (!errors || errors.length === 0) {
+      monaco.editor.setModelMarkers(model, 'java-diagnostics', []);
+      return;
+    }
+
+    // Standard native squiggly underline with tooltip
+    const markers = errors.map((err) => {
+      const lineContent = model.getLineContent(err.line) || '';
+      const startCol = Math.max(1, Math.min(err.column || 1, lineContent.length + 1));
+      const endCol = Math.max(startCol + 1, lineContent.length + 1);
+
+      return {
+        startLineNumber: err.line,
+        startColumn: startCol,
+        endLineNumber: err.line,
+        endColumn: endCol,
+        message: err.message,
+        severity: monaco.MarkerSeverity.Error,
+        source: 'javac',
+      };
+    });
+
+    monaco.editor.setModelMarkers(model, 'java-diagnostics', markers);
+  }, [errors]);
+
+  const handleCodeChange = (newVal: string | undefined) => {
+    const val = newVal ?? '';
+    // Clear markers when user starts editing so old errors don't linger
+    if (monacoRef.current && editorRef.current) {
+      const model = editorRef.current.getModel();
+      if (model) {
+        monacoRef.current.editor.setModelMarkers(model, 'java-diagnostics', []);
+      }
+    }
+    onChange(val);
+  };
+
   const linesCount = code.split('\n').length;
   const charCount = code.length;
+
+  // Dynamically detect file name from public class or first class
+  const pubMatch = code.match(/public\s+(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+([A-Za-z0-9_$]+)/);
+  const classMatch = code.match(/(?:public\s+|final\s+|abstract\s+)*class\s+([A-Za-z0-9_$]+)/);
+  const detectedFileName = `${pubMatch ? pubMatch[1] : (classMatch ? classMatch[1] : 'Main')}.java`;
+
+  // Detect missing imports (e.g. ArrayList, Scanner, HashMap, File, etc.)
+  const missingImports = findMissingImports(code);
+
+  const handleAutoImport = () => {
+    const { updatedCode, addedImports } = applyAutoImportsToCode(code);
+    if (addedImports.length > 0) {
+      onChange(updatedCode);
+    }
+  };
 
   return (
     <div className={`flex flex-col border rounded-lg overflow-hidden h-full w-full transition-colors ${
@@ -50,9 +128,10 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             isDark ? 'bg-slate-900 border-slate-800 text-amber-400' : 'bg-white border-slate-300 text-amber-600'
           }`}>
             <FileCode className="w-4 h-4 text-amber-500" />
-            <span>Main.java</span>
+            <span>{detectedFileName}</span>
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           </div>
+
           <span className={`text-[11px] font-mono hidden sm:inline ${
             isDark ? 'text-slate-500' : 'text-slate-400'
           }`}>
@@ -60,8 +139,24 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
           </span>
         </div>
 
-        {/* Prominent & Highly Visible RUN Button */}
+        {/* Action Controls & Run Button */}
         <div className="flex items-center gap-2">
+          {/* Auto-Import Button if missing imports detected */}
+          {missingImports.length > 0 && (
+            <button
+              onClick={handleAutoImport}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded transition cursor-pointer border shadow-sm ${
+                isDark
+                  ? 'bg-amber-950/50 border-amber-500/60 text-amber-300 hover:bg-amber-900/60 hover:text-amber-200 hover:border-amber-400'
+                  : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400'
+              }`}
+              title={`Click to automatically import: ${missingImports.map(m => m.className).join(', ')}`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span>Auto Import ({missingImports.length})</span>
+            </button>
+          )}
+
           {!isRunning ? (
             <button
               onClick={onRun}
@@ -70,9 +165,6 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             >
               <Play className="w-4 h-4 fill-current group-hover:scale-110 transition-transform" />
               <span className="uppercase tracking-wider">Run</span>
-              <span className="hidden sm:inline-block text-[10px] bg-emerald-950/80 text-emerald-200 px-1.5 py-0.5 rounded border border-emerald-400/40 font-mono font-semibold">
-                Ctrl+Enter
-              </span>
             </button>
           ) : (
             <button
@@ -88,13 +180,13 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
       </div>
 
       {/* Monaco Editor Mount Area */}
-      <div className={`flex-1 relative ${isDark ? 'bg-[#1e1e1e]' : 'bg-white'}`}>
+      <div className={`flex-1 min-h-0 relative ${isDark ? 'bg-[#1e1e1e]' : 'bg-white'}`}>
         <Editor
           height="100%"
           defaultLanguage="java"
           theme={isDark ? 'vs-dark' : 'vs'}
           value={code}
-          onChange={(val) => onChange(val || '')}
+          onChange={handleCodeChange}
           onMount={handleEditorDidMount}
           options={{
             fontSize: settings.fontSize,
@@ -108,8 +200,8 @@ export const EditorContainer: React.FC<EditorContainerProps> = ({
             cursorBlinking: 'smooth',
             cursorSmoothCaretAnimation: 'on',
             bracketPairColorization: { enabled: true },
-            formatOnType: true,
-            formatOnPaste: true,
+            formatOnType: false,
+            formatOnPaste: false,
             padding: { top: 10, bottom: 10 },
           }}
         />
