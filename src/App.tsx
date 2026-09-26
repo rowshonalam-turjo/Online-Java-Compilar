@@ -334,16 +334,12 @@ export default function App() {
       <main className={`flex-1 grid grid-cols-1 md:grid-cols-12 gap-2 p-2 overflow-hidden transition-colors ${
         isDark ? 'bg-slate-950' : 'bg-slate-200/60'
       }`}>
-        {/* Left Area: Monaco Code Editor */}
+        {/* Left Area: Code Editor */}
         <div className="md:col-span-7 xl:col-span-7 h-full min-h-[350px] overflow-hidden">
           <EditorContainer
             code={code}
             onChange={(val) => {
               setCode(val);
-              if (response?.error) {
-                setResponse(null);
-              }
-              if (targetLine) setTargetLine(null);
             }}
             isRunning={isRunning}
             onRun={handleRun}
